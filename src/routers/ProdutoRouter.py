@@ -1,41 +1,70 @@
-from fastapi import APIRouter, Depends
-from typing import Optional
-from domain.entities.Produto import Produto
-from dependencies import get_current_active_user, require_group
-from auth import FuncionarioAuth
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-#Nícolas Bastos
+from domain.schemas.ProdutoSchema import ProdutoCreate, ProdutoResponse, ProdutoUpdate
+from infra.database import get_db
+from infra.orm.ProdutoModel import ProdutoModel
 
-router = APIRouter()
+router = APIRouter(prefix="/produtos", tags=["Produto"])
 
-# Criar as rotas/endpoints: GET, POST, PUT, DELETE
 
-# GET TODOS (público - sem autenticação) - lista simples sem id e valor
-@router.get("/produto/publico", tags=["Produto"], status_code=200)
-def get_produto_publico():
-    return {"msg": "produto get todos (público) executado"}
+@router.get("/", response_model=list[ProdutoResponse], status_code=status.HTTP_200_OK)
+async def listar_produtos(db: Session = Depends(get_db)) -> list[ProdutoModel]:
+    return db.query(ProdutoModel).all()
 
-# GET TODOS (autenticado) - lista completa
-@router.get("/produto/", tags=["Produto"], status_code=200)
-def get_produto(current_user: FuncionarioAuth = Depends(get_current_active_user)):
-    return {"msg": "produto get todos (completo) executado", "usuario_id": current_user.usuario_id}
 
-# GET UM - autenticado
-@router.get("/produto/{id}", tags=["Produto"], status_code=200)
-def get_produto(id: int, current_user: FuncionarioAuth = Depends(get_current_active_user)):
-    return {"msg": "produto get um executado", "usuario_id": current_user.usuario_id}
+@router.get("/{id}", response_model=ProdutoResponse, status_code=status.HTTP_200_OK)
+async def buscar_produto_por_id(id: int, db: Session = Depends(get_db)) -> ProdutoModel:
+    produto = db.query(ProdutoModel).filter(ProdutoModel.id == id).first()
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto nao encontrado")
+    return produto
 
-# POST - grupo 1
-@router.post("/produto/", tags=["Produto"], status_code=200)
-def post_produto(corpo: Produto, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "produto post executado", "nome": corpo.nome, "descricao": corpo.descricao, "foto": corpo.foto, "valor_unitario": corpo.valor_unitario, "usuario_id": current_user.usuario_id}
 
-# PUT - grupo 1
-@router.put("/produto/{id}", tags=["Produto"], status_code=200)
-def put_produto(id: int, corpo: Produto, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "produto put executado", "id": id, "nome": corpo.nome, "descricao": corpo.descricao, "foto": corpo.foto, "valor_unitario": corpo.valor_unitario, "usuario_id": current_user.usuario_id}
+@router.post("/", response_model=ProdutoResponse, status_code=status.HTTP_201_CREATED)
+async def criar_produto(payload: ProdutoCreate, db: Session = Depends(get_db)) -> ProdutoModel:
+    produto = ProdutoModel(**payload.model_dump())
+    try:
+        db.add(produto)
+        db.commit()
+        db.refresh(produto)
+        return produto
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao criar produto: {exc}")
 
-# DELETE - grupo 1
-@router.delete("/produto/{id}", tags=["Produto"], status_code=200)
-def delete_produto(id: int, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "produto delete executado", "id": id, "usuario_id": current_user.usuario_id}
+
+@router.put("/{id}", response_model=ProdutoResponse, status_code=status.HTTP_200_OK)
+async def atualizar_produto(
+    id: int, payload: ProdutoUpdate, db: Session = Depends(get_db)
+) -> ProdutoModel:
+    produto = db.query(ProdutoModel).filter(ProdutoModel.id == id).first()
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto nao encontrado")
+
+    dados = payload.model_dump(exclude_unset=True)
+    try:
+        for campo, valor in dados.items():
+            setattr(produto, campo, valor)
+        db.commit()
+        db.refresh(produto)
+        return produto
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao atualizar produto: {exc}")
+
+
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def remover_produto(id: int, db: Session = Depends(get_db)) -> dict[str, str]:
+    produto = db.query(ProdutoModel).filter(ProdutoModel.id == id).first()
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto nao encontrado")
+
+    try:
+        db.delete(produto)
+        db.commit()
+        return {"detail": "Produto removido com sucesso"}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao remover produto: {exc}")

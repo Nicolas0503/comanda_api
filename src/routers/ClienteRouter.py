@@ -1,35 +1,82 @@
-from fastapi import APIRouter, Depends
-from domain.entities.Cliente import Cliente
-from dependencies import get_current_active_user, require_group
-from auth import FuncionarioAuth
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-#Nícolas Bastos
+from domain.schemas.ClienteSchema import ClienteCreate, ClienteResponse, ClienteUpdate
+from infra.database import get_db
+from infra.orm.ClienteModel import ClienteModel
 
-router = APIRouter()
+router = APIRouter(prefix="/clientes", tags=["Cliente"])
 
-# Criar as rotas/endpoints: GET, POST, PUT, DELETE
 
-# GET TODOS - qualquer usuário autenticado
-@router.get("/cliente/", tags=["Cliente"], status_code=200)
-def get_cliente(current_user: FuncionarioAuth = Depends(get_current_active_user)):
-    return {"msg": "cliente get todos executado", "usuario_id": current_user.usuario_id}
+@router.get("/", response_model=list[ClienteResponse], status_code=status.HTTP_200_OK)
+async def listar_clientes(db: Session = Depends(get_db)) -> list[ClienteModel]:
+    return db.query(ClienteModel).all()
 
-# GET UM - qualquer usuário autenticado
-@router.get("/cliente/{id}", tags=["Cliente"], status_code=200)
-def get_cliente(id: int, current_user: FuncionarioAuth = Depends(get_current_active_user)):
-    return {"msg": "cliente get um executado", "usuario_id": current_user.usuario_id}
 
-# POST - grupos 1 e 3
-@router.post("/cliente/", tags=["Cliente"], status_code=200)
-def post_cliente(corpo: Cliente, current_user: FuncionarioAuth = Depends(require_group([1, 3]))):
-    return {"msg": "cliente post executado", "nome": corpo.nome, "cpf": corpo.cpf, "telefone": corpo.telefone, "usuario_id": current_user.usuario_id}
+@router.get("/{id}", response_model=ClienteResponse, status_code=status.HTTP_200_OK)
+async def buscar_cliente_por_id(id: int, db: Session = Depends(get_db)) -> ClienteModel:
+    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+    return cliente
 
-# PUT - grupos 1 e 3
-@router.put("/cliente/{id}", tags=["Cliente"], status_code=200)
-def put_cliente(id: int, corpo: Cliente, current_user: FuncionarioAuth = Depends(require_group([1, 3]))):
-    return {"msg": "cliente put executado", "id":id, "nome": corpo.nome, "cpf": corpo.cpf, "telefone": corpo.telefone, "usuario_id": current_user.usuario_id}
 
-# DELETE - apenas grupo 1
-@router.delete("/cliente/{id}", tags=["Cliente"], status_code=200)
-def delete_cliente(id: int, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "cliente delete executado", "id":id, "usuario_id": current_user.usuario_id}
+@router.post("/", response_model=ClienteResponse, status_code=status.HTTP_201_CREATED)
+async def criar_cliente(payload: ClienteCreate, db: Session = Depends(get_db)) -> ClienteModel:
+    if db.query(ClienteModel).filter(ClienteModel.cpf == payload.cpf).first():
+        raise HTTPException(status_code=409, detail="CPF ja cadastrado")
+
+    cliente = ClienteModel(**payload.model_dump())
+    try:
+        db.add(cliente)
+        db.commit()
+        db.refresh(cliente)
+        return cliente
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao criar cliente: {exc}")
+
+
+@router.put("/{id}", response_model=ClienteResponse, status_code=status.HTTP_200_OK)
+async def atualizar_cliente(
+    id: int, payload: ClienteUpdate, db: Session = Depends(get_db)
+) -> ClienteModel:
+    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+
+    dados = payload.model_dump(exclude_unset=True)
+    if "cpf" in dados:
+        cpf_existente = (
+            db.query(ClienteModel)
+            .filter(ClienteModel.cpf == dados["cpf"], ClienteModel.id != id)
+            .first()
+        )
+        if cpf_existente:
+            raise HTTPException(status_code=409, detail="CPF ja cadastrado")
+
+    try:
+        for campo, valor in dados.items():
+            setattr(cliente, campo, valor)
+        db.commit()
+        db.refresh(cliente)
+        return cliente
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao atualizar cliente: {exc}")
+
+
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def remover_cliente(id: int, db: Session = Depends(get_db)) -> dict[str, str]:
+    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+
+    try:
+        db.delete(cliente)
+        db.commit()
+        return {"detail": "Cliente removido com sucesso"}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao remover cliente: {exc}")

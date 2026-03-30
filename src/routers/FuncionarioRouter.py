@@ -1,35 +1,93 @@
-from fastapi import APIRouter, Depends
-from domain.entities.Funcionario import Funcionario
-from dependencies import get_current_active_user, require_group
-from auth import FuncionarioAuth
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-#Nícolas Bastos
+from domain.schemas.FuncionarioSchema import (
+    FuncionarioCreate,
+    FuncionarioResponse,
+    FuncionarioUpdate,
+)
+from infra.database import get_db
+from infra.orm.FuncionarioModel import FuncionarioModel
 
-router = APIRouter()
+router = APIRouter(prefix="/funcionarios", tags=["Funcionario"])
 
-# Criar as rotas/endpoints: GET, POST, PUT, DELETE
 
-# GET TODOS - apenas grupo 1 (admin)
-@router.get("/funcionario/", tags=["Funcionário"], status_code=200)
-def get_funcionario(current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "funcionario get todos executado", "usuario_id": current_user.usuario_id}
+@router.get("/", response_model=list[FuncionarioResponse], status_code=status.HTTP_200_OK)
+async def listar_funcionarios(db: Session = Depends(get_db)) -> list[FuncionarioModel]:
+    return db.query(FuncionarioModel).all()
 
-# GET UM - qualquer usuário autenticado
-@router.get("/funcionario/{id}", tags=["Funcionário"], status_code=200)
-def get_funcionario(id: int, current_user: FuncionarioAuth = Depends(get_current_active_user)):
-    return {"msg": "funcionario get um executado", "usuario_id": current_user.usuario_id}
 
-# POST - apenas grupo 1
-@router.post("/funcionario/", tags=["Funcionário"], status_code=200)
-def post_funcionario(corpo: Funcionario, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "funcionario post executado", "nome": corpo.nome, "cpf": corpo.cpf, "telefone": corpo.telefone, "usuario_id": current_user.usuario_id}
+@router.get("/{id}", response_model=FuncionarioResponse, status_code=status.HTTP_200_OK)
+async def buscar_funcionario_por_id(
+    id: int, db: Session = Depends(get_db)
+) -> FuncionarioModel:
+    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    if not funcionario:
+        raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
+    return funcionario
 
-# PUT - apenas grupo 1
-@router.put("/funcionario/{id}", tags=["Funcionário"], status_code=200)
-def put_funcionario(id: int, corpo: Funcionario, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "funcionario put executado", "id": id, "nome": corpo.nome, "cpf": corpo.cpf, "telefone": corpo.telefone, "usuario_id": current_user.usuario_id}
 
-# DELETE - apenas grupo 1
-@router.delete("/funcionario/{id}", tags=["Funcionário"], status_code=200)
-def delete_funcionario(id: int, current_user: FuncionarioAuth = Depends(require_group([1]))):
-    return {"msg": "funcionario delete executado", "id":id, "usuario_id": current_user.usuario_id}
+@router.post("/", response_model=FuncionarioResponse, status_code=status.HTTP_201_CREATED)
+async def criar_funcionario(
+    payload: FuncionarioCreate, db: Session = Depends(get_db)
+) -> FuncionarioModel:
+    if db.query(FuncionarioModel).filter(FuncionarioModel.cpf == payload.cpf).first():
+        raise HTTPException(status_code=409, detail="CPF ja cadastrado")
+
+    funcionario = FuncionarioModel(**payload.model_dump())
+    try:
+        db.add(funcionario)
+        db.commit()
+        db.refresh(funcionario)
+        return funcionario
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao criar funcionario: {exc}")
+
+
+@router.put("/{id}", response_model=FuncionarioResponse, status_code=status.HTTP_200_OK)
+async def atualizar_funcionario(
+    id: int, payload: FuncionarioUpdate, db: Session = Depends(get_db)
+) -> FuncionarioModel:
+    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    if not funcionario:
+        raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
+
+    dados = payload.model_dump(exclude_unset=True)
+    if "cpf" in dados:
+        cpf_existente = (
+            db.query(FuncionarioModel)
+            .filter(FuncionarioModel.cpf == dados["cpf"], FuncionarioModel.id != id)
+            .first()
+        )
+        if cpf_existente:
+            raise HTTPException(status_code=409, detail="CPF ja cadastrado")
+
+    try:
+        for campo, valor in dados.items():
+            setattr(funcionario, campo, valor)
+        db.commit()
+        db.refresh(funcionario)
+        return funcionario
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Erro ao atualizar funcionario: {exc}",
+        )
+
+
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def remover_funcionario(id: int, db: Session = Depends(get_db)) -> dict[str, str]:
+    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    if not funcionario:
+        raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
+
+    try:
+        db.delete(funcionario)
+        db.commit()
+        return {"detail": "Funcionario removido com sucesso"}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao remover funcionario: {exc}")
