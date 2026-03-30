@@ -10,6 +10,20 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
 RELOAD = os.getenv("RELOAD", "true").lower() == "true"
 
+# Configuracoes de autenticacao
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_this_secret_in_production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+
+# Credenciais do usuario admin bootstrap
+BOOTSTRAP_ADMIN_NOME = os.getenv("BOOTSTRAP_ADMIN_NOME", "Administrador")
+BOOTSTRAP_ADMIN_MATRICULA = os.getenv("BOOTSTRAP_ADMIN_MATRICULA", "admin")
+BOOTSTRAP_ADMIN_CPF = os.getenv("BOOTSTRAP_ADMIN_CPF", "00000000000")
+BOOTSTRAP_ADMIN_TELEFONE = os.getenv("BOOTSTRAP_ADMIN_TELEFONE", "11999999999")
+BOOTSTRAP_ADMIN_GRUPO = os.getenv("BOOTSTRAP_ADMIN_GRUPO", "1")
+BOOTSTRAP_ADMIN_SENHA = os.getenv("BOOTSTRAP_ADMIN_SENHA", "admin123")
+
 # Configuracoes do banco
 DB_DIALECT = os.getenv("DB_DIALECT", "sqlite")
 DB_NAME = os.getenv("DB_NAME", "comanda.db")

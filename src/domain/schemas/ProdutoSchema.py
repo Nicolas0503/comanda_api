@@ -23,3 +23,11 @@ class ProdutoResponse(ProdutoBase):
     id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProdutoPublicResponse(BaseModel):
+    nome: str
+    descricao: str
+    foto: bytes | None = None
+
+    model_config = ConfigDict(from_attributes=True)
