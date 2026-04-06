@@ -1,0 +1,56 @@
+@baseUrl = http://127.0.0.1:8000
+
+### 1) LOGIN (gera access_token e registra auditoria LOGIN)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "login": "admin",
+  "senha": "admin123"
+}
+
+### Copie o token retornado acima
+@token = COLE_O_ACCESS_TOKEN_AQUI
+
+### 2) CREATE Cliente (registra auditoria CREATE)
+POST {{baseUrl}}/clientes/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nome": "Cliente Auditoria",
+  "cpf": "98765432100",
+  "telefone": "11911111111"
+}
+
+### 3) UPDATE Cliente (registra dados_antigos + dados_novos)
+PUT {{baseUrl}}/clientes/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nome": "Cliente Auditoria Atualizado",
+  "telefone": "11922222222"
+}
+
+### 4) DELETE Cliente (registra dados_antigos)
+DELETE {{baseUrl}}/clientes/1
+Authorization: Bearer {{token}}
+
+### 5) Consultar auditoria (apenas grupo admin)
+GET {{baseUrl}}/auditoria/?limit=100
+Authorization: Bearer {{token}}
+
+### 6) Health full (DB + tabelas + sistema)
+GET {{baseUrl}}/health/full
+
+### 6.1) Readiness
+GET {{baseUrl}}/ready
+
+### 6.2) Liveness
+GET {{baseUrl}}/live
+
+### 7) Rate limiting (dispare repetidamente para receber 429)
+# Execute este bloco varias vezes em menos de 1 minuto.
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{token}}

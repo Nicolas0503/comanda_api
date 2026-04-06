@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from domain.schemas.AuthSchema import (
@@ -10,6 +10,7 @@ from domain.schemas.AuthSchema import (
 )
 from infra.database import get_db
 from infra.orm.FuncionarioModel import FuncionarioModel
+from infra.rate_limit import limiter, limits
 from security.auth import (
     create_access_token,
     create_refresh_token,
@@ -17,12 +18,14 @@ from security.auth import (
     revoke_refresh_token,
     validate_refresh_token,
 )
+from services.AuditoriaService import AcaoAuditoria, AuditoriaService, RecursoAuditoria
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+@limiter.limit(limits.critical)
+async def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     funcionario = (
         db.query(FuncionarioModel)
         .filter(
@@ -32,10 +35,30 @@ async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenRe
         .first()
     )
     if not funcionario or funcionario.senha != payload.senha:
+        AuditoriaService.registrar(
+            db=db,
+            request=request,
+            funcionario_id=None,
+            acao=AcaoAuditoria.LOGIN,
+            recurso=RecursoAuditoria.AUTH,
+            dados_novos={"login": payload.login, "sucesso": False},
+        )
+        db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais invalidas")
 
     access_token, access_expires = create_access_token(funcionario)
     refresh_token, _ = create_refresh_token(funcionario)
+
+    AuditoriaService.registrar(
+        db=db,
+        request=request,
+        funcionario_id=funcionario.id,
+        acao=AcaoAuditoria.LOGIN,
+        recurso=RecursoAuditoria.AUTH,
+        recurso_id=funcionario.id,
+        dados_novos={"login": payload.login, "sucesso": True},
+    )
+    db.commit()
 
     return TokenResponse(
         access_token=access_token,
@@ -45,7 +68,13 @@ async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenRe
 
 
 @router.post("/refresh", response_model=AccessTokenResponse, status_code=status.HTTP_200_OK)
-async def refresh_token(payload: RefreshRequest, db: Session = Depends(get_db)) -> AccessTokenResponse:
+@limiter.limit(limits.restrictive)
+async def refresh_token(
+    request: Request,
+    payload: RefreshRequest,
+    db: Session = Depends(get_db),
+) -> AccessTokenResponse:
+    _ = request
     token_payload = validate_refresh_token(payload.refresh_token)
     user_id = token_payload.get("sub")
 
@@ -58,11 +87,15 @@ async def refresh_token(payload: RefreshRequest, db: Session = Depends(get_db)) 
 
 
 @router.get("/me", response_model=FuncionarioAuth, status_code=status.HTTP_200_OK)
-async def me(current_user: FuncionarioAuth = Depends(get_current_active_user)) -> FuncionarioAuth:
+@limiter.limit(limits.moderate)
+async def me(request: Request, current_user: FuncionarioAuth = Depends(get_current_active_user)) -> FuncionarioAuth:
+    _ = request
     return current_user
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
-async def logout(payload: RefreshRequest) -> dict[str, str]:
+@limiter.limit(limits.moderate)
+async def logout(request: Request, payload: RefreshRequest) -> dict[str, str]:
+    _ = request
     revoke_refresh_token(payload.refresh_token)
     return {"detail": "Logout realizado com sucesso"}

@@ -24,11 +24,12 @@ Base = declarative_base()
 
 
 async def cria_tabelas() -> None:
+    from infra.orm.AuditoriaModel import AuditoriaModel
     from infra.orm.ClienteModel import ClienteModel
     from infra.orm.FuncionarioModel import FuncionarioModel
     from infra.orm.ProdutoModel import ProdutoModel
 
-    _ = (ClienteModel, FuncionarioModel, ProdutoModel)
+    _ = (ClienteModel, FuncionarioModel, ProdutoModel, AuditoriaModel)
     await asyncio.to_thread(Base.metadata.create_all, bind=engine)
 
 
