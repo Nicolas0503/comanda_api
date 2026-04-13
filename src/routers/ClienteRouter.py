@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.schemas.AuthSchema import FuncionarioAuth
 from domain.schemas.ClienteSchema import ClienteCreate, ClienteResponse, ClienteUpdate
@@ -9,6 +10,12 @@ from infra.orm.ClienteModel import ClienteModel
 from infra.rate_limit import limiter, limits
 from security.auth import get_current_active_user, require_group
 from services.AuditoriaService import AcaoAuditoria, AuditoriaService, RecursoAuditoria
+from services.QueryFilterService import (
+    append_equal_filter,
+    append_ilike_filter,
+    apply_filters,
+    apply_pagination,
+)
 
 router = APIRouter(prefix="/clientes", tags=["Cliente"])
 
@@ -26,12 +33,30 @@ def _cliente_to_dict(cliente: ClienteModel) -> dict:
 @limiter.limit(limits.moderate)
 async def listar_clientes(
     request: Request,
-    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    id: int | None = Query(None),
+    nome: str | None = Query(None),
+    cpf: str | None = Query(None),
+    telefone: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(get_current_active_user),
 ) -> list[ClienteModel]:
     _ = request
     _ = current_user
-    return db.query(ClienteModel).all()
+
+    filters: list = []
+    append_equal_filter(filters, ClienteModel.id, id)
+    append_ilike_filter(filters, ClienteModel.nome, nome)
+    append_equal_filter(filters, ClienteModel.cpf, cpf)
+    append_equal_filter(filters, ClienteModel.telefone, telefone)
+
+    statement = select(ClienteModel).order_by(ClienteModel.id)
+    statement = apply_filters(statement, filters)
+    statement = apply_pagination(statement, skip=skip, limit=limit)
+
+    result = await db.scalars(statement)
+    return result.all()
 
 
 @router.get("/{id}", response_model=ClienteResponse, status_code=status.HTTP_200_OK)
@@ -39,12 +64,12 @@ async def listar_clientes(
 async def buscar_cliente_por_id(
     request: Request,
     id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(get_current_active_user),
 ) -> ClienteModel:
     _ = request
     _ = current_user
-    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    cliente = await db.scalar(select(ClienteModel).where(ClienteModel.id == id))
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente nao encontrado")
     return cliente
@@ -55,17 +80,17 @@ async def buscar_cliente_por_id(
 async def criar_cliente(
     request: Request,
     payload: ClienteCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1, 3])),
 ) -> ClienteModel:
     _ = current_user
-    if db.query(ClienteModel).filter(ClienteModel.cpf == payload.cpf).first():
+    if await db.scalar(select(ClienteModel).where(ClienteModel.cpf == payload.cpf)):
         raise HTTPException(status_code=409, detail="CPF ja cadastrado")
 
     cliente = ClienteModel(**payload.model_dump())
     try:
         db.add(cliente)
-        db.flush()
+        await db.flush()
         AuditoriaService.registrar(
             db=db,
             request=request,
@@ -75,11 +100,11 @@ async def criar_cliente(
             recurso_id=cliente.id,
             dados_novos=_cliente_to_dict(cliente),
         )
-        db.commit()
-        db.refresh(cliente)
+        await db.commit()
+        await db.refresh(cliente)
         return cliente
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail=f"Erro ao criar cliente: {exc}")
 
 
@@ -89,11 +114,11 @@ async def atualizar_cliente(
     request: Request,
     id: int,
     payload: ClienteUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1, 3])),
 ) -> ClienteModel:
     _ = current_user
-    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    cliente = await db.scalar(select(ClienteModel).where(ClienteModel.id == id))
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente nao encontrado")
 
@@ -102,9 +127,12 @@ async def atualizar_cliente(
     dados = payload.model_dump(exclude_unset=True)
     if "cpf" in dados:
         cpf_existente = (
-            db.query(ClienteModel)
-            .filter(ClienteModel.cpf == dados["cpf"], ClienteModel.id != id)
-            .first()
+            await db.scalar(
+                select(ClienteModel).where(
+                    ClienteModel.cpf == dados["cpf"],
+                    ClienteModel.id != id,
+                )
+            )
         )
         if cpf_existente:
             raise HTTPException(status_code=409, detail="CPF ja cadastrado")
@@ -124,11 +152,11 @@ async def atualizar_cliente(
             dados_novos=_cliente_to_dict(cliente),
         )
 
-        db.commit()
-        db.refresh(cliente)
+        await db.commit()
+        await db.refresh(cliente)
         return cliente
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail=f"Erro ao atualizar cliente: {exc}")
 
 
@@ -137,11 +165,11 @@ async def atualizar_cliente(
 async def remover_cliente(
     request: Request,
     id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1])),
 ) -> dict[str, str]:
     _ = current_user
-    cliente = db.query(ClienteModel).filter(ClienteModel.id == id).first()
+    cliente = await db.scalar(select(ClienteModel).where(ClienteModel.id == id))
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente nao encontrado")
 
@@ -157,9 +185,9 @@ async def remover_cliente(
             recurso_id=cliente.id,
             dados_antigos=dados_antigos,
         )
-        db.delete(cliente)
-        db.commit()
+        await db.delete(cliente)
+        await db.commit()
         return {"detail": "Cliente removido com sucesso"}
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail=f"Erro ao remover cliente: {exc}")

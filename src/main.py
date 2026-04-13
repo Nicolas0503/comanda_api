@@ -14,6 +14,7 @@ from routers import (
     AuditoriaRouter,
     AuthRouter,
     ClienteRouter,
+    ComandaRouter,
     FuncionarioRouter,
     HealthRouter,
     ProdutoRouter,
@@ -49,6 +50,7 @@ async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded) ->
 app.include_router(FuncionarioRouter.router)
 app.include_router(ClienteRouter.router)
 app.include_router(ProdutoRouter.router)
+app.include_router(ComandaRouter.router)
 app.include_router(AuthRouter.router)
 app.include_router(AuditoriaRouter.router)
 app.include_router(HealthRouter.router)

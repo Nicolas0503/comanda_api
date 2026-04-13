@@ -6,7 +6,8 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.schemas.AuthSchema import FuncionarioAuth
 from infra.database import get_db
@@ -70,9 +71,9 @@ def decode_token(token: str) -> dict:
         ) from exc
 
 
-def get_current_active_user(
+async def get_current_active_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> FuncionarioAuth:
     payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
@@ -90,7 +91,7 @@ def get_current_active_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == int(user_id)).first()
+    funcionario = await db.scalar(select(FuncionarioModel).where(FuncionarioModel.id == int(user_id)))
     if not funcionario:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

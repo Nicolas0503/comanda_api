@@ -1,3 +1,4 @@
+import asyncio
 import os
 import platform
 from datetime import UTC, datetime
@@ -5,7 +6,7 @@ from datetime import UTC, datetime
 import psutil
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import inspect, text
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.database import engine, get_db
 from infra.rate_limit import limiter, limits
@@ -24,6 +25,8 @@ EXPECTED_TABLES = {
     "funcionarios",
     "clientes",
     "produtos",
+    "comandas",
+    "comanda_itens",
     "auditoria",
 }
 
@@ -36,18 +39,18 @@ def _classify(metric_value: float, warn: float, fail: float) -> str:
     return "healthy"
 
 
-def _database_status(db: Session) -> dict:
+async def _database_status(db: AsyncSession) -> dict:
     try:
-        db.execute(text("SELECT 1"))
+        await db.execute(text("SELECT 1"))
         return {"status": "healthy", "detail": "Conexao com banco valida"}
     except Exception as exc:
         return {"status": "unhealthy", "detail": f"Falha ao conectar no banco: {exc}"}
 
 
-def _tables_status() -> dict:
+async def _tables_status() -> dict:
     try:
-        inspector = inspect(engine)
-        existing = set(inspector.get_table_names())
+        async with engine.begin() as conn:
+            existing = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         missing = sorted(EXPECTED_TABLES - existing)
 
         if missing:
@@ -67,7 +70,7 @@ def _tables_status() -> dict:
         return {"status": "unhealthy", "detail": f"Falha ao validar tabelas: {exc}"}
 
 
-def _system_status() -> dict:
+def _system_status_sync() -> dict:
     cpu = psutil.cpu_percent(interval=0.2)
     memory = psutil.virtual_memory().percent
     disk = psutil.disk_usage(os.getcwd()).percent
@@ -98,6 +101,10 @@ def _system_status() -> dict:
     }
 
 
+async def _system_status() -> dict:
+    return await asyncio.to_thread(_system_status_sync)
+
+
 @router.get("/health", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.low)
 async def health_basic(request: Request):
@@ -111,32 +118,32 @@ async def health_basic(request: Request):
 
 @router.get("/health/database", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.moderate)
-async def health_database(request: Request, db: Session = Depends(get_db)):
+async def health_database(request: Request, db: AsyncSession = Depends(get_db)):
     _ = request
-    return _database_status(db)
+    return await _database_status(db)
 
 
 @router.get("/health/database/tables", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.moderate)
 async def health_database_tables(request: Request):
     _ = request
-    return _tables_status()
+    return await _tables_status()
 
 
 @router.get("/health/system", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.low)
 async def health_system(request: Request):
     _ = request
-    return _system_status()
+    return await _system_status()
 
 
 @router.get("/health/full", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.restrictive)
-async def health_full(request: Request, db: Session = Depends(get_db)):
+async def health_full(request: Request, db: AsyncSession = Depends(get_db)):
     _ = request
-    db_info = _database_status(db)
-    table_info = _tables_status()
-    system_info = _system_status()
+    db_info = await _database_status(db)
+    table_info = await _tables_status()
+    system_info = await _system_status()
 
     statuses = [db_info["status"], table_info["status"], system_info["status"]]
     if "unhealthy" in statuses:
@@ -159,10 +166,10 @@ async def health_full(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/ready", status_code=status.HTTP_200_OK)
 @limiter.limit(limits.moderate)
-async def readiness(request: Request, db: Session = Depends(get_db)):
+async def readiness(request: Request, db: AsyncSession = Depends(get_db)):
     _ = request
-    db_info = _database_status(db)
-    table_info = _tables_status()
+    db_info = await _database_status(db)
+    table_info = await _tables_status()
 
     if db_info["status"] != "healthy" or table_info["status"] != "healthy":
         return {

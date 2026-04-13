@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from fastapi import Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.orm.AuditoriaModel import AuditoriaModel
 
@@ -19,6 +19,8 @@ class RecursoAuditoria(StrEnum):
     FUNCIONARIO = "FUNCIONARIO"
     CLIENTE = "CLIENTE"
     PRODUTO = "PRODUTO"
+    COMANDA = "COMANDA"
+    COMANDA_ITEM = "COMANDA_ITEM"
     AUTH = "AUTH"
 
 
@@ -31,7 +33,7 @@ class AuditoriaService:
 
     @staticmethod
     def registrar(
-        db: Session,
+        db: AsyncSession,
         request: Request,
         funcionario_id: int | None,
         acao: AcaoAuditoria,

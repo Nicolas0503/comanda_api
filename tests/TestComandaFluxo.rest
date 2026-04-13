@@ -1,0 +1,143 @@
+@baseUrl = http://127.0.0.1:8000
+
+### Referencia de nome para aparecer no video
+### Nicolas Bastos - atividade comandas
+
+### 1) Login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "login": "admin",
+  "senha": "admin123"
+}
+
+### Copie o access_token acima
+@token = COLE_O_ACCESS_TOKEN_AQUI
+
+### 2) Criar produtos de exemplo (se ja existirem, pode pular)
+POST {{baseUrl}}/produtos/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nome": "pastel de carne",
+  "descricao": "pastel tradicional de carne",
+  "valor_unitario": 12.0
+}
+
+###
+POST {{baseUrl}}/produtos/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nome": "coxinha de frango",
+  "descricao": "coxinha recheada com frango",
+  "valor_unitario": 8.0
+}
+
+###
+POST {{baseUrl}}/produtos/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nome": "pastel assado",
+  "descricao": "pastel assado no forno",
+  "valor_unitario": 10.0
+}
+
+### 3) Descobrir IDs dos produtos pelo nome
+GET {{baseUrl}}/produtos/?nome=pastel%20de%20carne&skip=0&limit=10
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/produtos/?nome=coxinha%20de%20frango&skip=0&limit=10
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/produtos/?nome=pastel%20assado&skip=0&limit=10
+Authorization: Bearer {{token}}
+
+### 4) Criar comanda numero 12345
+POST {{baseUrl}}/comandas/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "numero": "12345",
+  "status": "ABERTA",
+  "cliente_id": 1,
+  "funcionario_id": 1
+}
+
+### Configure IDs retornados da etapa 3
+@idPastelCarne = 1
+@idCoxinhaFrango = 2
+@idPastelAssado = 3
+
+### 5) Incluir 5 unidades de pastel de carne
+POST {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "produto_id": {{idPastelCarne}},
+  "quantidade": 5
+}
+
+### 6) Incluir 2 unidades de coxinha de frango
+POST {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "produto_id": {{idCoxinhaFrango}},
+  "quantidade": 2
+}
+
+### 7) Incluir 1 unidade de pastel assado
+POST {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "produto_id": {{idPastelAssado}},
+  "quantidade": 1
+}
+
+### 8) Incluir 1 unidade de pastel de carne
+POST {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "produto_id": {{idPastelCarne}},
+  "quantidade": 1
+}
+
+### 9) Listar itens para descobrir item_id de cada linha
+GET {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}
+
+### Configure os IDs dos itens para as etapas seguintes
+@itemPastel5 = 1
+@itemPastelAssado1 = 3
+
+### 10) Editar a quantidade de 5 para 3 pasteis
+PUT {{baseUrl}}/comandas/numero/12345/itens/{{itemPastel5}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "quantidade": 3
+}
+
+### 11) Excluir 1 unidade de pastel assado
+DELETE {{baseUrl}}/comandas/numero/12345/itens/{{itemPastelAssado1}}
+Authorization: Bearer {{token}}
+
+### 12) Listar todos os produtos da comanda numero 12345
+GET {{baseUrl}}/comandas/numero/12345/itens
+Authorization: Bearer {{token}}

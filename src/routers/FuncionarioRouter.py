@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.schemas.FuncionarioSchema import (
     FuncionarioCreate,
@@ -13,6 +14,12 @@ from infra.orm.FuncionarioModel import FuncionarioModel
 from infra.rate_limit import limiter, limits
 from security.auth import get_current_active_user, require_group
 from services.AuditoriaService import AcaoAuditoria, AuditoriaService, RecursoAuditoria
+from services.QueryFilterService import (
+    append_equal_filter,
+    append_ilike_filter,
+    apply_filters,
+    apply_pagination,
+)
 
 router = APIRouter(prefix="/funcionarios", tags=["Funcionario"])
 
@@ -32,12 +39,34 @@ def _funcionario_to_dict(funcionario: FuncionarioModel) -> dict:
 @limiter.limit(limits.moderate)
 async def listar_funcionarios(
     request: Request,
-    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    id: int | None = Query(None),
+    nome: str | None = Query(None),
+    matricula: str | None = Query(None),
+    cpf: str | None = Query(None),
+    grupo: str | None = Query(None),
+    telefone: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1])),
 ) -> list[FuncionarioModel]:
     _ = request
     _ = current_user
-    return db.query(FuncionarioModel).all()
+
+    filters: list = []
+    append_equal_filter(filters, FuncionarioModel.id, id)
+    append_ilike_filter(filters, FuncionarioModel.nome, nome)
+    append_equal_filter(filters, FuncionarioModel.matricula, matricula)
+    append_equal_filter(filters, FuncionarioModel.cpf, cpf)
+    append_equal_filter(filters, FuncionarioModel.grupo, grupo)
+    append_equal_filter(filters, FuncionarioModel.telefone, telefone)
+
+    statement = select(FuncionarioModel).order_by(FuncionarioModel.id)
+    statement = apply_filters(statement, filters)
+    statement = apply_pagination(statement, skip=skip, limit=limit)
+
+    result = await db.scalars(statement)
+    return result.all()
 
 
 @router.get("/{id}", response_model=FuncionarioResponse, status_code=status.HTTP_200_OK)
@@ -45,12 +74,12 @@ async def listar_funcionarios(
 async def buscar_funcionario_por_id(
     request: Request,
     id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(get_current_active_user),
 ) -> FuncionarioModel:
     _ = request
     _ = current_user
-    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    funcionario = await db.scalar(select(FuncionarioModel).where(FuncionarioModel.id == id))
     if not funcionario:
         raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
     return funcionario
@@ -61,17 +90,17 @@ async def buscar_funcionario_por_id(
 async def criar_funcionario(
     request: Request,
     payload: FuncionarioCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1])),
 ) -> FuncionarioModel:
     _ = current_user
-    if db.query(FuncionarioModel).filter(FuncionarioModel.cpf == payload.cpf).first():
+    if await db.scalar(select(FuncionarioModel).where(FuncionarioModel.cpf == payload.cpf)):
         raise HTTPException(status_code=409, detail="CPF ja cadastrado")
 
     funcionario = FuncionarioModel(**payload.model_dump())
     try:
         db.add(funcionario)
-        db.flush()
+        await db.flush()
         AuditoriaService.registrar(
             db=db,
             request=request,
@@ -81,11 +110,11 @@ async def criar_funcionario(
             recurso_id=funcionario.id,
             dados_novos=_funcionario_to_dict(funcionario),
         )
-        db.commit()
-        db.refresh(funcionario)
+        await db.commit()
+        await db.refresh(funcionario)
         return funcionario
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail=f"Erro ao criar funcionario: {exc}")
 
 
@@ -95,11 +124,11 @@ async def atualizar_funcionario(
     request: Request,
     id: int,
     payload: FuncionarioUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1])),
 ) -> FuncionarioModel:
     _ = current_user
-    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    funcionario = await db.scalar(select(FuncionarioModel).where(FuncionarioModel.id == id))
     if not funcionario:
         raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
 
@@ -108,9 +137,12 @@ async def atualizar_funcionario(
     dados = payload.model_dump(exclude_unset=True)
     if "cpf" in dados:
         cpf_existente = (
-            db.query(FuncionarioModel)
-            .filter(FuncionarioModel.cpf == dados["cpf"], FuncionarioModel.id != id)
-            .first()
+            await db.scalar(
+                select(FuncionarioModel).where(
+                    FuncionarioModel.cpf == dados["cpf"],
+                    FuncionarioModel.id != id,
+                )
+            )
         )
         if cpf_existente:
             raise HTTPException(status_code=409, detail="CPF ja cadastrado")
@@ -130,11 +162,11 @@ async def atualizar_funcionario(
             dados_novos=_funcionario_to_dict(funcionario),
         )
 
-        db.commit()
-        db.refresh(funcionario)
+        await db.commit()
+        await db.refresh(funcionario)
         return funcionario
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=400,
             detail=f"Erro ao atualizar funcionario: {exc}",
@@ -146,11 +178,11 @@ async def atualizar_funcionario(
 async def remover_funcionario(
     request: Request,
     id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: FuncionarioAuth = Depends(require_group([1])),
 ) -> dict[str, str]:
     _ = current_user
-    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == id).first()
+    funcionario = await db.scalar(select(FuncionarioModel).where(FuncionarioModel.id == id))
     if not funcionario:
         raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
 
@@ -166,9 +198,9 @@ async def remover_funcionario(
             recurso_id=funcionario.id,
             dados_antigos=dados_antigos,
         )
-        db.delete(funcionario)
-        db.commit()
+        await db.delete(funcionario)
+        await db.commit()
         return {"detail": "Funcionario removido com sucesso"}
     except SQLAlchemyError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail=f"Erro ao remover funcionario: {exc}")

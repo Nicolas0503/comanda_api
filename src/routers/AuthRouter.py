@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.schemas.AuthSchema import (
     AccessTokenResponse,
@@ -25,14 +26,12 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 @limiter.limit(limits.critical)
-async def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    funcionario = (
-        db.query(FuncionarioModel)
-        .filter(
+async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    funcionario = await db.scalar(
+        select(FuncionarioModel).where(
             (FuncionarioModel.matricula == payload.login)
             | (FuncionarioModel.cpf == payload.login)
         )
-        .first()
     )
     if not funcionario or funcionario.senha != payload.senha:
         AuditoriaService.registrar(
@@ -43,7 +42,7 @@ async def login(request: Request, payload: LoginRequest, db: Session = Depends(g
             recurso=RecursoAuditoria.AUTH,
             dados_novos={"login": payload.login, "sucesso": False},
         )
-        db.commit()
+        await db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais invalidas")
 
     access_token, access_expires = create_access_token(funcionario)
@@ -58,7 +57,7 @@ async def login(request: Request, payload: LoginRequest, db: Session = Depends(g
         recurso_id=funcionario.id,
         dados_novos={"login": payload.login, "sucesso": True},
     )
-    db.commit()
+    await db.commit()
 
     return TokenResponse(
         access_token=access_token,
@@ -72,13 +71,13 @@ async def login(request: Request, payload: LoginRequest, db: Session = Depends(g
 async def refresh_token(
     request: Request,
     payload: RefreshRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> AccessTokenResponse:
     _ = request
     token_payload = validate_refresh_token(payload.refresh_token)
     user_id = token_payload.get("sub")
 
-    funcionario = db.query(FuncionarioModel).filter(FuncionarioModel.id == int(user_id)).first()
+    funcionario = await db.scalar(select(FuncionarioModel).where(FuncionarioModel.id == int(user_id)))
     if not funcionario:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario nao encontrado")
 
