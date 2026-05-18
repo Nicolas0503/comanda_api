@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: comandas-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: comanda
+      POSTGRES_USER: comanda
+      POSTGRES_PASSWORD: comanda_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U comanda -d comanda"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+    container_name: comandas-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8443
+      RELOAD: "false"
+      DB_DIALECT: postgres
+      DB_NAME: comanda
+      DB_USER: comanda
+      DB_PASSWORD: comanda_dev_password
+      DB_HOST: db
+      DB_PORT: "5432"
+      JWT_SECRET_KEY: change-this-in-production
+      BOOTSTRAP_ADMIN_SENHA: change-this-in-production
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "8443:8443/tcp"
+      - "8443:8443/udp"
+    command:
+      - hypercorn
+      - main:app
+      - --bind
+      - 0.0.0.0:8443
+      - --quic-bind
+      - 0.0.0.0:8443
+      - --certfile
+      - /certs/tls.crt
+      - --keyfile
+      - /certs/tls.key
+      - --access-logfile
+      - -
+      - --error-logfile
+      - -
+
+volumes:
+  postgres_data:
